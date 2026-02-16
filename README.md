@@ -16,7 +16,7 @@ SPFLI-AIRPFROM
 SPFLI-COUNTRYTO 
 SPFLI-CITYTO
 SPFLI-DEPTIME  
-SPFLI-ARRTIME
+SPFLI-ARRTIME.
 2.	Permitir que o usuário selecione uma linha ou mais da table control
 3.	Ter três botões de ação:
 o	Exibir Reservas → abre um ALV com os dados de reservas da tabela SBOOK. Campos a serem exibidos no ALV:
