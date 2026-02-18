@@ -1,0 +1,228 @@
+*&---------------------------------------------------------------------*
+*& Include         ZRELVOO11
+*&---------------------------------------------------------------------*
+
+FORM exportar_alv.
+  TYPES: BEGIN OF ty_alv,
+           carrid   TYPE sbook-carrid,
+           connid   TYPE sbook-connid,
+           fldate   TYPE sbook-fldate,
+           bookid   TYPE sbook-bookid,
+           customid TYPE sbook-customid,
+           passname TYPE sbook-passname,
+         END OF ty_alv.
+
+  DATA: lo_alv TYPE REF TO cl_salv_table,
+        lt_alv TYPE STANDARD TABLE OF ty_alv.
+
+
+  SELECT carrid,  connid,    fldate,
+         bookid,  customid,  passname
+  FROM sbook
+  INTO CORRESPONDING FIELDS OF TABLE @lt_alv
+  FOR ALL ENTRIES IN @it_selecionadas
+  WHERE carrid = @it_selecionadas-carrid
+    AND connid = @it_selecionadas-connid
+    AND fldate = @it_selecionadas-fldate.
+  SORT lt_alv BY carrid connid fldate bookid customid.
+
+  TRY.
+      cl_salv_table=>factory(
+        IMPORTING
+          r_salv_table = lo_alv
+        CHANGING
+          t_table      = lt_alv ).
+      lo_alv->get_columns( )->set_optimize( abap_true ).
+      lo_alv->display( ).
+    CATCH cx_salv_msg INTO DATA(lx_msg).
+      MESSAGE lx_msg->get_text( ) TYPE 'E'.
+  ENDTRY.
+ENDFORM.
+
+FORM exportar_csv.
+
+  TYPES: BEGIN OF ty_csv,
+           carrid    TYPE scarr-carrid,
+           connid    TYPE spfli-connid,
+           url       TYPE scarr-url,
+           id        TYPE scustom-id,
+           name      TYPE scustom-name,
+           form      TYPE scustom-form,
+           street    TYPE scustom-street,
+           postcode  TYPE scustom-postcode,
+           city      TYPE scustom-city,
+           country   TYPE scustom-country,
+           region    TYPE scustom-region,
+           telephone TYPE scustom-telephone,
+           email     TYPE scustom-email,
+         END OF ty_csv.
+
+  DATA: lt_raw_data TYPE STANDARD TABLE OF ty_csv,
+        lt_csv      TYPE STANDARD TABLE OF string,
+        lv_line     TYPE string,
+        lv_path     TYPE string,
+        lv_filename TYPE string,
+        lv_fullpath TYPE string.
+
+  CONSTANTS c_header TYPE string VALUE 'CARRID;CONNID;URL;ID;NAME;FORM;STREET;POSTCODE;CITY;COUNTRY;REGION;TELEPHONE;EMAIL'.
+
+  SELECT
+      s~carrid, s~connid,r~url, s~customid AS id, c~name, c~form,
+      c~street, c~postcode, c~city, c~country, c~region, c~telephone, c~email
+    FROM sbook    AS s
+    INNER JOIN scustom AS c ON c~id    = s~customid
+    INNER JOIN scarr   AS r ON r~carrid = s~carrid
+    INTO CORRESPONDING FIELDS OF TABLE @lt_raw_data
+    FOR ALL ENTRIES IN @it_selecionadas
+   WHERE s~carrid = @it_selecionadas-carrid
+     AND s~connid = @it_selecionadas-connid
+     AND s~fldate = @it_selecionadas-fldate.
+
+  APPEND c_header TO lt_csv.
+
+  "Preenche o conteúdo do CSV
+  LOOP AT lt_raw_data ASSIGNING FIELD-SYMBOL(<fs_csv>).
+    lv_line = |{ <fs_csv>-carrid };{ <fs_csv>-connid };{ <fs_csv>-url };{ <fs_csv>-id };{ <fs_csv>-name };{ <fs_csv>-form };{ <fs_csv>-street };{ <fs_csv>-postcode };{ <fs_csv>-city };{ <fs_csv>-country };{ <fs_csv>-region };{ <fs_csv>-telephone };{
+<fs_csv>-email }|.
+    APPEND lv_line TO lt_csv.
+  ENDLOOP.
+
+  "Chama tela de seleção de arquivo/local do arquivo
+  CALL METHOD cl_gui_frontend_services=>file_save_dialog
+    EXPORTING
+      default_extension   = 'csv'
+      default_file_name   = 'export.csv'
+      file_filter         = 'Arquivos CSV (*.csv)|*.csv|'
+      prompt_on_overwrite = abap_true
+    CHANGING
+      filename            = lv_filename
+      path                = lv_path
+      fullpath            = lv_fullpath
+    EXCEPTIONS
+      OTHERS              = 1.
+
+  IF sy-subrc = 0 AND lv_fullpath IS NOT INITIAL.
+    "Realiza o download do arquivo.csv
+    CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+        filename                = lv_fullpath
+        filetype                = 'ASC'
+      TABLES
+        data_tab                = lt_csv
+      EXCEPTIONS
+        file_write_error        = 1
+        no_authority            = 2
+        invalid_filename        = 3
+        invalid_type            = 4
+        no_batch                = 5
+        gui_refuse_filetransfer = 6
+        customer_error          = 7
+        OTHERS                  = 8.
+    IF sy-subrc = 0.
+      MESSAGE |Arquivo CSV { lv_filename } exportado com sucesso para: { lv_path }| TYPE 'S'.
+    ELSE.
+      MESSAGE |Erro ao realizar o download do arqvuivo: { sy-subrc }| TYPE 'E'.
+    ENDIF.
+  ELSE.
+    MESSAGE |Operação cancelada pelo usuário| TYPE 'I'.
+  ENDIF.
+ENDFORM.
+
+FORM gerar_smartforms.
+
+  DATA: ls_sf_header TYPE zst_sf_11.
+
+  DATA: lt_sf_lines TYPE TABLE OF sbook,
+        ls_sf_lines TYPE sbook.
+
+  DATA: lv_nome_funcao TYPE rs38l_fnam,
+        lv_total_val   TYPE p LENGTH 16 DECIMALS 2,
+        lv_total_txt   TYPE string,
+        lv_qtd_pass    TYPE string,
+        lt_booking     TYPE STANDARD TABLE OF zvoos_table11,
+        ls_booking     TYPE zvoos_table11.
+
+  READ TABLE it_selecionadas INTO DATA(ls_selecao) INDEX 1.
+  CHECK sy-subrc = 0.
+
+
+  MOVE-CORRESPONDING ls_selecao TO ls_sf_header.
+
+  SELECT a~carrname, b~airpto, b~cityfrom, b~airpfrom,
+         b~cityto, b~countryfr, b~countryto, b~deptime, b~arrtime
+    UP TO 1 ROWS
+    FROM scarr AS a
+    INNER JOIN spfli AS b ON a~carrid = b~carrid
+    INTO CORRESPONDING FIELDS OF @ls_sf_header
+    WHERE b~connid = @ls_sf_header-connid.
+  ENDSELECT.
+
+
+  SELECT *
+    FROM sbook
+    INTO TABLE @lt_sf_lines
+    WHERE connid = @ls_sf_header-connid
+      AND fldate = @ls_sf_header-fldate
+    ORDER BY loccuram DESCENDING.
+
+
+  CLEAR: lv_total_val, lv_qtd_pass.
+  LOOP AT lt_sf_lines INTO ls_sf_lines.
+    lv_total_val = lv_total_val + ls_sf_lines-loccuram.
+  ENDLOOP.
+
+  lv_total_txt = lv_total_val.
+  CONDENSE lv_total_txt.
+  lv_qtd_pass = lines( lt_sf_lines ).
+  CONDENSE lv_qtd_pass.
+
+  CALL FUNCTION 'SSF_FUNCTION_MODULE_NAME'
+    EXPORTING
+      formname           = 'ZVOOS_RESERVA_11'
+    IMPORTING
+      fm_name            = lv_nome_funcao
+    EXCEPTIONS
+      no_form            = 1
+      no_function_module = 2
+      OTHERS             = 3.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Smartform Z_VOOS_RESERVA_11 não encontrado.' TYPE 'I' DISPLAY LIKE 'E'.
+    RETURN.
+  ENDIF.
+
+  " Chama o Smartform passando a estrutura preenchida
+  CALL FUNCTION lv_nome_funcao
+    EXPORTING
+      " Agora passamos os campos individuais ou a estrutura inteira
+      " DEPENDENDO DE COMO VOCÊ CRIOU NO SMARTFORMS.
+      " Abaixo mantenho o exemplo passando campo a campo, que é mais seguro:
+      v_carrname       = ls_sf_header-carrname
+      v_connid         = ls_sf_header-connid
+      v_citfr          = ls_sf_header-cityfrom
+      v_airfr          = ls_sf_header-airpfrom
+      v_citto          = ls_sf_header-cityto
+      v_airto          = ls_sf_header-airpto
+      v_countryfr      = ls_sf_header-countryfr
+      v_countryto      = ls_sf_header-countryto
+      v_fldate         = ls_sf_header-fldate
+      v_deptime        = ls_sf_header-deptime
+      v_arrtime        = ls_sf_header-arrtime
+      v_qtd_pass       = lv_qtd_pass
+      v_total_txt      = lv_total_txt
+      " Se quiser passar a estrutura inteira, crie um parâmetro 'IS_HEADER' no Smartform
+    " is_header        = ls_sf_header
+    TABLES
+      it_booking       = lt_sf_lines
+    EXCEPTIONS
+      formatting_error = 1
+      internal_error   = 2
+      send_error       = 3
+      user_canceled    = 4
+      OTHERS           = 5.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Erro na execução do Smartform.' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.
