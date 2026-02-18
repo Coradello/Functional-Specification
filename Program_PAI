@@ -1,0 +1,107 @@
+*&---------------------------------------------------------------------*
+*& Include         ZRELVOO11
+*&---------------------------------------------------------------------*
+
+MODULE get_carrname INPUT.
+  CASE scarr-carrid.
+    WHEN '   '.
+      CLEAR: scarr-carrname, it_voos.
+      gv_filtro_atual = scarr-carrid.
+      MESSAGE 'Forneça uma companhia aérea' TYPE 'S' DISPLAY LIKE 'W'.
+      LEAVE TO SCREEN sy-dynnr.
+    WHEN gv_filtro_atual.
+      RETURN.
+    WHEN OTHERS.
+      SELECT SINGLE carrname
+        INTO @scarr-carrname
+        FROM scarr
+        WHERE carrid = @scarr-carrid.
+      IF sy-subrc <> 0.
+        MESSAGE 'Companhia aérea não encontrada' TYPE 'S' DISPLAY LIKE 'W'.
+        LEAVE TO SCREEN sy-dynnr.
+      ENDIF.
+  ENDCASE.
+ENDMODULE.
+
+MODULE get_data INPUT.
+  " Evita repetir SELECT se já está com a mesma companhia
+  CHECK scarr-carrid <> gv_filtro_atual.
+  " Limpa tabela antes de popular
+  CLEAR it_voos.
+
+  SELECT DISTINCT
+         a~carrid,
+         b~connid,
+         c~fldate,
+         a~carrname,
+         b~countryfr,
+         b~cityfrom,
+         b~airpfrom,
+         b~countryto,
+         b~cityto,
+         b~deptime,
+         b~arrtime
+    INTO TABLE @it_voos
+    FROM scarr AS a
+    INNER JOIN spfli AS b
+      ON a~carrid = b~carrid
+    INNER JOIN sbook AS c
+      ON b~carrid = c~carrid
+     AND b~connid = c~connid
+    WHERE a~carrid = @scarr-carrid
+    ORDER BY a~carrid, b~connid, c~fldate.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Nenhum registro encontrado' TYPE 'S' DISPLAY LIKE 'W'.
+  ENDIF.
+  gv_filtro_atual = scarr-carrid.
+ENDMODULE.
+
+MODULE pushbutton INPUT.
+  CHECK sy-ucomm = 'BT_SW'
+     OR sy-ucomm = 'BT_CSV'
+     OR sy-ucomm = 'BT_PNT'.
+
+  DATA: lv_lines TYPE i.
+  CLEAR: lv_lines, it_selecionadas.
+
+  " Percorre it_voos e copia registros marcados
+  LOOP AT it_voos ASSIGNING <fs_tab>.
+    IF <fs_tab>-mark = 'X'.
+      APPEND <fs_tab> TO it_selecionadas.
+      lv_lines += 1.
+      CLEAR <fs_tab>-mark.
+    ENDIF.
+  ENDLOOP.
+  UNASSIGN <fs_tab>.
+
+  SORT it_selecionadas BY carrid connid fldate.
+
+  IF lv_lines = 0.
+    MESSAGE 'Não há registros selecionados' TYPE 'S' DISPLAY LIKE 'W'.
+    RETURN.
+  ENDIF.
+
+  CASE sy-ucomm.
+    WHEN 'BT_SW'.
+      PERFORM exportar_alv.
+    WHEN 'BT_CSV'.
+      PERFORM exportar_csv.
+    WHEN 'BT_PNT'.
+      IF lv_lines > 1.
+        MESSAGE 'Há mais de um registro selecionado' TYPE 'S' DISPLAY LIKE 'W'.
+        RETURN.
+      ENDIF.
+      PERFORM gerar_smartforms.
+  ENDCASE.
+
+  CLEAR sy-ucomm.
+ENDMODULE.
+
+
+MODULE TC9004_mark INPUT.
+  MODIFY it_voos
+    FROM wa_voos
+    INDEX tc9004-current_line
+    TRANSPORTING mark.
+ENDMODULE.
